@@ -12,3 +12,4 @@ bin           = @["BoorusDownloader"]
 
 requires "nim >= 2.0.0"
 requires "db_connector"
+requires "nimbooru >= 0.1.1"
