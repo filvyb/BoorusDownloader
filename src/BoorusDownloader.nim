@@ -37,7 +37,7 @@ proc existsInDB(hash: string): bool =
   var res = db.getAllRows(sql"SELECT id FROM posts WHERE md5 = ?", hash)
   return res.len > 0
 
-proc downloadFile(image: BooruImage, folder_path: string): Future[bool] {.async.} =
+proc downloadFile(client: AsyncHttpClient, image: BooruImage, folder_path: string): Future[bool] {.async.} =
   if image.file_url == "" or image.hash == "":
     return false
 
@@ -55,7 +55,7 @@ proc downloadFile(image: BooruImage, folder_path: string): Future[bool] {.async.
   filepath = filepath / image.hash
   var tmp = image.file_url.split(".")
   filepath = filepath.addFileExt(tmp[tmp.len - 1])
-  var client = newAsyncHttpClient()
+  #var client = newAsyncHttpClient()
   try:
     await client.downloadFile(image.file_url, filepath)
   except IOError:
@@ -69,11 +69,13 @@ proc main_func() {.async.} =
   var b = initBooruClient(Danbooru)
   var images = await b.asyncSearchPosts()
   var page = 1
+  var client = newAsyncHttpClient()
   while images.len > 0:
     for i in images:
       if existsInDB(i.hash):
+        echo "Already downloaded ", i.file_url
         continue
-      if await downloadFile(i, "MyDataset"):
+      if await downloadFile(client, i, "MyDataset"):
         echo "Downloaded ", i.file_url
         insertImage(i, $Danbooru)
 
