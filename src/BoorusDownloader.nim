@@ -1,6 +1,7 @@
 import httpclient, asyncdispatch, os, strutils, sequtils
 import db_connector/db_sqlite
 import nimbooru
+import argparse
 
 var db: DbConn
 
@@ -63,8 +64,8 @@ proc downloadFile(client: AsyncHttpClient, image: BooruImage, folder_path: strin
     return false
   return true
 
-proc main_func() {.async.} =
-  initDB("MyDataset" / "boorufiles.sqlite")
+proc main_func(output: string, selected_boorus: seq[Boorus]) {.async.} =
+  initDB(output / "boorufiles.sqlite")
 
   var b = initBooruClient(Danbooru)
   var images = await b.asyncSearchPosts()
@@ -75,7 +76,7 @@ proc main_func() {.async.} =
       if existsInDB(i.hash):
         echo "Already downloaded ", i.file_url
         continue
-      if await downloadFile(client, i, "MyDataset"):
+      if await downloadFile(client, i, output):
         echo "Downloaded ", i.file_url
         insertImage(i, $Danbooru)
 
@@ -85,4 +86,35 @@ proc main_func() {.async.} =
 
 
 when isMainModule:
-  waitFor main_func()
+  var p = newParser:
+    option("-o", "--output", help="Output to this folder, defaults to MyDataset")
+    option("-b", "--boorus", help="Type desired boorus from Nimbooru seperated by !")
+    option("-cr", "--credentials", help="Type credentials for Boorus, in format apiKey;userId!apiKey;userId in order corresponding to Boorus")
+
+  var dataset_path = "MyDataset"
+  var selected_boorus: seq[Boorus]
+  var creds: seq[(string, string)]
+
+  try:
+    var opts = p.parse(commandLineParams())
+    if opts.output != "":
+      dataset_path = opts.output
+    if opts.boorus == "":
+      stderr.writeLine("You need to specify boorus you want to download")
+      quit(1)
+    var tmpseq = opts.boorus.split("!")
+    for t in tmpseq:
+      selected_boorus &= parseEnum[Boorus](t)
+
+    if not dirExists(dataset_path):
+      createDir(dataset_path)
+
+  except ShortCircuit as e:
+    if e.flag == "argparse_help":
+      echo e.help
+      quit(1)
+  except UsageError as e:
+    stderr.writeLine(e.msg)
+    quit(1)
+
+  waitFor main_func(dataset_path, selected_boorus)
