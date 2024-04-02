@@ -1,9 +1,16 @@
-import httpclient, asyncdispatch, os, strutils, sequtils
+import httpclient, asyncdispatch, os, strutils, sequtils, std/enumutils
 import db_connector/db_sqlite
 import nimbooru
 import argparse
 
 var db: DbConn
+
+proc parseEnumSymbol[T](s: string): T =
+  var sym = s.toUpper
+  for e in T.items:
+    if e.symbolName.toUpper == sym:
+      return e
+  raise newException(ValueError, "Invalid enum symbol: " & s)
 
 proc initDB(dbpath: string) =
   if not fileExists(dbpath):
@@ -32,7 +39,7 @@ proc insertImage(image: BooruImage, booru: string) =
 
   var tags = image.tags.join(" ")
   var tmp = image.file_url.split(".")
-  db.exec(sql"INSERT INTO posts (md5, file_ext, tag_string, tag_count_general, booru) VALUES (?, ?, ?, ?, ?)", image.hash, tmp[tmp.len - 1], tags, image.tags.len, booru)
+  db.exec(sql"INSERT INTO posts (md5, file_ext, tag_string, tag_count_general, booru) VALUES (?, ?, ?, ?, ?)", image.hash, tmp[^1], tags, image.tags.len, booru)
 
 proc existsInDB(hash: string): bool =
   var res = db.getAllRows(sql"SELECT id FROM posts WHERE md5 = ?", hash)
@@ -55,7 +62,7 @@ proc downloadFile(client: AsyncHttpClient, image: BooruImage, folder_path: strin
     createDir(filepath)
   filepath = filepath / image.hash
   var tmp = image.file_url.split(".")
-  filepath = filepath.addFileExt(tmp[tmp.len - 1])
+  filepath = filepath.addFileExt(tmp[^1])
   #var client = newAsyncHttpClient()
   try:
     await client.downloadFile(image.file_url, filepath)
@@ -67,22 +74,22 @@ proc downloadFile(client: AsyncHttpClient, image: BooruImage, folder_path: strin
 proc main_func(output: string, selected_boorus: seq[Boorus]) {.async.} =
   initDB(output / "boorufiles.sqlite")
 
-  var b = initBooruClient(Danbooru)
-  var images = await b.asyncSearchPosts()
-  var page = 1
-  var client = newAsyncHttpClient()
-  while images.len > 0:
-    for i in images:
-      if existsInDB(i.hash):
-        echo "Already downloaded ", i.file_url
-        continue
-      if await downloadFile(client, i, output):
-        echo "Downloaded ", i.file_url
-        insertImage(i, $Danbooru)
+  for b in selected_boorus:
+    var bc = initBooruClient(b)
+    var images = await bc.asyncSearchPosts()
+    var page = 1
+    var client = newAsyncHttpClient()
+    while images.len > 0:
+      for i in images:
+        if existsInDB(i.hash):
+          echo "Already downloaded ", i.file_url
+          continue
+        if await downloadFile(client, i, output):
+          echo "Downloaded ", i.file_url
+          insertImage(i, $b)
 
-    inc page
-    images = await b.asyncSearchPosts(page = page)
-
+      inc page
+      images = await bc.asyncSearchPosts(page = page)
 
 
 when isMainModule:
@@ -104,7 +111,7 @@ when isMainModule:
       quit(1)
     var tmpseq = opts.boorus.split("!")
     for t in tmpseq:
-      selected_boorus &= parseEnum[Boorus](t)
+      selected_boorus &= parseEnumSymbol[Boorus](t)
 
     if not dirExists(dataset_path):
       createDir(dataset_path)
