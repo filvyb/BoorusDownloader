@@ -1,9 +1,9 @@
 import httpclient, asyncdispatch, os, strutils, sequtils, std/enumutils
-import db_connector/db_sqlite
+import waterpark/sqlite
 import nimbooru
 import argparse
 
-var db: DbConn
+var dbpool: SqlitePool
 
 proc parseEnumSymbol[T](s: string): T =
   var sym = s.toUpper
@@ -14,24 +14,25 @@ proc parseEnumSymbol[T](s: string): T =
 
 proc initDB(dbpath: string) =
   if not fileExists(dbpath):
-    db = open(dbpath, "", "", "")
-    db.exec(sql"""CREATE TABLE posts (
-                    id INTEGER PRIMARY KEY,
-                    md5 TEXT,
-                    file_ext TEXT,
-                    tag_string TEXT,
-                    tag_count_general INTEGER,
-                    booru TEXT
-                    )""")
-    
-    db.exec(sql"""CREATE INDEX md5_index ON posts (md5)""")
-    db.exec(sql"""CREATE INDEX md5_booru_index ON posts (md5, booru)""")
-    db.exec(sql"""CREATE INDEX id_booru_index ON posts (id, booru)""")
-    db.exec(sql"""CREATE INDEX id_md5_booru_index ON posts (id, md5, booru)""")
+    dbpool = newSqlitePool(10, dbpath)
+    dbpool.withConnection conn:
+      conn.exec(sql"""CREATE TABLE posts (
+                      id INTEGER PRIMARY KEY,
+                      md5 TEXT,
+                      file_ext TEXT,
+                      tag_string TEXT,
+                      tag_count_general INTEGER,
+                      booru TEXT
+                      )""")
+      
+      conn.exec(sql"""CREATE INDEX md5_index ON posts (md5)""")
+      conn.exec(sql"""CREATE INDEX md5_booru_index ON posts (md5, booru)""")
+      conn.exec(sql"""CREATE INDEX id_booru_index ON posts (id, booru)""")
+      conn.exec(sql"""CREATE INDEX id_md5_booru_index ON posts (id, md5, booru)""")
   else:
-    db = open(dbpath, "", "", "")
-  
-  db.exec(sql"PRAGMA journal_mode=WAL")
+    dbpool = newSqlitePool(10, dbpath)
+  dbpool.withConnection conn:
+    conn.exec(sql"PRAGMA journal_mode=WAL")
 
 proc insertImage(image: BooruImage, booru: string) =
   if image.hash == "":
@@ -39,10 +40,13 @@ proc insertImage(image: BooruImage, booru: string) =
 
   var tags = image.tags.join(" ")
   var tmp = image.file_url.split(".")
-  db.exec(sql"INSERT INTO posts (md5, file_ext, tag_string, tag_count_general, booru) VALUES (?, ?, ?, ?, ?)", image.hash, tmp[^1], tags, image.tags.len, booru)
+  dbpool.withConnection conn:
+    conn.exec(sql"INSERT INTO posts (md5, file_ext, tag_string, tag_count_general, booru) VALUES (?, ?, ?, ?, ?)", image.hash, tmp[^1], tags, image.tags.len, booru)
 
 proc existsInDB(hash: string): bool =
-  var res = db.getAllRows(sql"SELECT id FROM posts WHERE md5 = ?", hash)
+  var res: seq[Row]
+  dbpool.withConnection conn:
+    res = conn.getAllRows(sql"SELECT id FROM posts WHERE md5 = ?", hash)
   return res.len > 0
 
 proc downloadFile(client: AsyncHttpClient, image: BooruImage, folder_path: string): Future[bool] {.async.} =
