@@ -1,7 +1,8 @@
-import httpclient, asyncdispatch, os, strutils, sequtils, std/enumutils
+import httpclient, os, strutils, sequtils, std/enumutils
 import waterpark/sqlite
 import nimbooru
 import argparse
+import malebolgia
 
 var dbpool: SqlitePool
 
@@ -49,7 +50,7 @@ proc existsInDB(hash: string): bool =
     res = conn.getAllRows(sql"SELECT id FROM posts WHERE md5 = ?", hash)
   return res.len > 0
 
-proc downloadFile(client: AsyncHttpClient, image: BooruImage, folder_path: string): Future[bool] {.async.} =
+proc downloadFile(client: HttpClient, image: BooruImage, folder_path: string): bool =
   if image.file_url == "" or image.hash == "":
     return false
 
@@ -67,33 +68,38 @@ proc downloadFile(client: AsyncHttpClient, image: BooruImage, folder_path: strin
   filepath = filepath / image.hash
   var tmp = image.file_url.split(".")
   filepath = filepath.addFileExt(tmp[^1])
-  #var client = newAsyncHttpClient()
+  #var client = newHttpClient()
   try:
-    await client.downloadFile(image.file_url, filepath)
+    client.downloadFile(image.file_url, filepath)
   except IOError:
     echo "Failed to download ", image.file_url
     return false
   return true
 
-proc main_func(output: string, selected_boorus: seq[Boorus]) {.async.} =
+proc process_batch(images: seq[BooruImage], output: string, booru: string) =
+  var client = newHttpClient()
+  for i in images:
+    if existsInDB(i.hash):
+      echo "Already downloaded ", i.file_url
+      continue
+    if downloadFile(client, i, output):
+      echo "Downloaded ", i.file_url
+      insertImage(i, booru)
+
+proc main_func(output: string, selected_boorus: seq[Boorus]) =
   initDB(output / "boorufiles.sqlite")
 
-  for b in selected_boorus:
-    var bc = initBooruClient(b)
-    var images = await bc.asyncSearchPosts()
-    var page = 1
-    var client = newAsyncHttpClient()
-    while images.len > 0:
-      for i in images:
-        if existsInDB(i.hash):
-          echo "Already downloaded ", i.file_url
-          continue
-        if await downloadFile(client, i, output):
-          echo "Downloaded ", i.file_url
-          insertImage(i, $b)
+  var m = createMaster()
+  m.awaitAll:
+    for b in selected_boorus:
+      var bc = initBooruClient(b)
+      var images = bc.searchPosts()
+      var page = 1
+      while images.len > 0:
+        m.spawn process_batch(images, output, $b)
 
-      inc page
-      images = await bc.asyncSearchPosts(page = page)
+        inc page
+        images = bc.searchPosts(page = page)
 
 
 when isMainModule:
@@ -101,8 +107,10 @@ when isMainModule:
     option("-o", "--output", help="Output to this folder, defaults to MyDataset")
     option("-b", "--boorus", help="Type desired boorus from Nimbooru seperated by !")
     option("-cr", "--credentials", help="Type credentials for Boorus, in format apiKey;userId!apiKey;userId in order corresponding to Boorus")
+    option("-vid", "--video", help="Download videos too")
 
   var dataset_path = "MyDataset"
+  var video = false
   var selected_boorus: seq[Boorus]
   var creds: seq[(string, string)]
 
@@ -110,6 +118,8 @@ when isMainModule:
     var opts = p.parse(commandLineParams())
     if opts.output != "":
       dataset_path = opts.output
+    if opts.video != "":
+      video = true
     if opts.boorus == "":
       stderr.writeLine("You need to specify boorus you want to download")
       quit(1)
@@ -128,4 +138,4 @@ when isMainModule:
     stderr.writeLine(e.msg)
     quit(1)
 
-  waitFor main_func(dataset_path, selected_boorus)
+  main_func(dataset_path, selected_boorus)
