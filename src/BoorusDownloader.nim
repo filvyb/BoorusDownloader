@@ -1,4 +1,4 @@
-import httpclient, os, strutils, sequtils, std/enumutils
+import httpclient, os, strutils, sequtils, std/enumutils, std/enumerate, options
 import waterpark/sqlite
 import nimbooru
 import argparse
@@ -90,13 +90,26 @@ proc process_batch(images: seq[BooruImage], output, booru: string, video: bool) 
       echo "Downloaded ", i.file_url
       insertImage(i, booru)
 
-proc main_func(output: string, selected_boorus: seq[Boorus], video: bool) =
+proc parse_redentials(creds: string): seq[(string, string)] =
+  var tmpseq = creds.split("!")
+  for t in tmpseq:
+    var tmp = t.split(";")
+    result.add((tmp[0], tmp[1]))
+
+proc main_func(output: string, selected_boorus: seq[Boorus], video: bool, creds: seq[(string, string)]) =
   initDB(output / "boorufiles.sqlite")
 
   var m = createMaster()
   m.awaitAll:
-    for b in selected_boorus:
+    for i, b in enumerate(selected_boorus):
       var bc = initBooruClient(b)
+      try:
+        bc.apiKey = some creds[i][0]
+        bc.userId = some creds[i][1]
+      except:
+        bc.apiKey = none string
+        bc.userId = none string
+        continue
       var images = bc.searchPosts()
       var page = 1
       while images.len > 0:
@@ -130,6 +143,8 @@ when isMainModule:
     var tmpseq = opts.boorus.split("!")
     for t in tmpseq:
       selected_boorus &= parseEnumSymbol[Boorus](t)
+    if opts.credentials != "":
+      creds = parse_redentials(opts.credentials)
 
     if not dirExists(dataset_path):
       createDir(dataset_path)
@@ -142,4 +157,4 @@ when isMainModule:
     stderr.writeLine(e.msg)
     quit(1)
 
-  main_func(dataset_path, selected_boorus, video)
+  main_func(dataset_path, selected_boorus, video, creds)
