@@ -40,9 +40,9 @@ proc insertImage(image: BooruImage, booru: string) =
     return
 
   var tags = image.tags.join(" ")
-  var tmp = image.file_url.split(".")
+  var ext = image.file_url.split(".")[^1]
   dbpool.withConnection conn:
-    conn.exec(sql"INSERT INTO posts (md5, file_ext, tag_string, tag_count_general, booru) VALUES (?, ?, ?, ?, ?)", image.hash, tmp[^1], tags, image.tags.len, booru)
+    conn.exec(sql"INSERT INTO posts (md5, file_ext, tag_string, tag_count_general, booru) VALUES (?, ?, ?, ?, ?)", image.hash, ext, tags, image.tags.len, booru)
 
 proc existsInDB(hash: string): bool =
   var res: seq[Row]
@@ -50,8 +50,12 @@ proc existsInDB(hash: string): bool =
     res = conn.getAllRows(sql"SELECT id FROM posts WHERE md5 = ?", hash)
   return res.len > 0
 
-proc downloadFile(client: HttpClient, image: BooruImage, folder_path: string): bool =
+proc downloadFile(client: HttpClient, image: BooruImage, folder_path: string, video: bool): bool =
   if image.file_url == "" or image.hash == "":
+    return false
+
+  var ext = image.file_url.split(".")[^1]
+  if not video and (ext == "webm" or ext == "mp4"):
     return false
 
   echo "Downloading ", image.file_url
@@ -76,17 +80,17 @@ proc downloadFile(client: HttpClient, image: BooruImage, folder_path: string): b
     return false
   return true
 
-proc process_batch(images: seq[BooruImage], output: string, booru: string) =
+proc process_batch(images: seq[BooruImage], output, booru: string, video: bool) =
   var client = newHttpClient()
   for i in images:
     if existsInDB(i.hash):
       echo "Already downloaded ", i.file_url
       continue
-    if downloadFile(client, i, output):
+    if downloadFile(client, i, output, video):
       echo "Downloaded ", i.file_url
       insertImage(i, booru)
 
-proc main_func(output: string, selected_boorus: seq[Boorus]) =
+proc main_func(output: string, selected_boorus: seq[Boorus], video: bool) =
   initDB(output / "boorufiles.sqlite")
 
   var m = createMaster()
@@ -96,7 +100,7 @@ proc main_func(output: string, selected_boorus: seq[Boorus]) =
       var images = bc.searchPosts()
       var page = 1
       while images.len > 0:
-        m.spawn process_batch(images, output, $b)
+        m.spawn process_batch(images, output, $b, video)
 
         inc page
         images = bc.searchPosts(page = page)
@@ -138,4 +142,4 @@ when isMainModule:
     stderr.writeLine(e.msg)
     quit(1)
 
-  main_func(dataset_path, selected_boorus)
+  main_func(dataset_path, selected_boorus, video)
